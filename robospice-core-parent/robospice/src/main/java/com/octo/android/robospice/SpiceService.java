@@ -16,6 +16,7 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.Binder;
 import android.os.IBinder;
+import android.support.v4.app.NotificationCompat;
 
 import com.octo.android.robospice.networkstate.DefaultNetworkStateChecker;
 import com.octo.android.robospice.networkstate.NetworkStateChecker;
@@ -26,15 +27,12 @@ import com.octo.android.robospice.request.CachedSpiceRequest;
 import com.octo.android.robospice.request.RequestProcessor;
 import com.octo.android.robospice.request.RequestProcessorListener;
 import com.octo.android.robospice.request.listener.RequestListener;
+import com.octo.android.robospice.request.listener.SpiceServiceServiceListener;
 
 /**
- * This is an abstract class used to manage the cache and provide web service
- * result to an activity. <br/>
- * Extends this class to provide a service able to load content from web service
- * or cache (if available and enabled). You will have to implement
- * {@link #createCacheManager(Application)} to configure the
- * {@link CacheManager} used by all requests to persist their results in the
- * cache (and load them from cache if possible).
+ * This is an abstract class used to manage the cache and provide web service result to an activity. <br/>
+ * Extends this class to provide a service able to load content from web service or cache (if available and enabled). You will have to implement {@link #createCacheManager(Application)} to configure
+ * the {@link CacheManager} used by all requests to persist their results in the cache (and load them from cache if possible).
  * @author jva
  * @author mwa
  * @author sni
@@ -82,16 +80,13 @@ public abstract class SpiceService extends Service {
 
         cacheManager = createCacheManager(getApplication());
         if (cacheManager == null) {
-            throw new IllegalArgumentException(
-                "createCacheManager() can't create a null cacheManager");
+            throw new IllegalArgumentException("createCacheManager() can't create a null cacheManager");
         }
 
         final ExecutorService executorService = getExecutorService();
         final NetworkStateChecker networkStateChecker = getNetworkStateChecker();
 
-        requestProcessor = new RequestProcessor(getApplicationContext(),
-            cacheManager, executorService, requestProcessorListener,
-            networkStateChecker);
+        requestProcessor = createRequestProcessor(executorService, networkStateChecker);
         requestProcessor.setFailOnCacheError(DEFAULT_FAIL_ON_CACHE_ERROR);
 
         notification = createDefaultNotification();
@@ -101,36 +96,38 @@ public abstract class SpiceService extends Service {
     }
 
     @Override
-    public int onStartCommand(final Intent intent, final int flags,
-        final int startId) {
+    public int onStartCommand(final Intent intent, final int flags, final int startId) {
         super.onStartCommand(intent, flags, startId);
         return START_NOT_STICKY;
     }
 
     /**
-     * Factory method to create an entity responsible to check for network
-     * state. The default implementation of this method will return a
-     * {@link DefaultNetworkStateChecker}. Override this method if you want to
-     * inject a custom network state for testing or to adapt to connectivity
-     * changes on the Android. This method is also useful to create non-network
-     * related requests. In that case create a {@link NetworkStateChecker} that
-     * always return true. This feature has been implemented following a request
-     * from Pierre Durand.
-     * @return a {@link NetworkStateChecker} that will be used to determine if
-     *         network state allows requests executions.
+     * Factory method to create an entity responsible for processing requests send to the SpiceService. The default implementation of this method will return a {@link RequestProcessor}. Override this
+     * method if you want to inject a custom request processor. This feature has been implemented following a request from Christopher Jenkins.
+     * @param executorService
+     *            a service executor that can be used to multi-thread request processing.
+     * @param networkStateChecker
+     *            an entity that will check network state.
+     * @return a {@link RequestProcessor} that will be used to process requests.
+     */
+    protected RequestProcessor createRequestProcessor(ExecutorService executorService, NetworkStateChecker networkStateChecker) {
+        return new RequestProcessor(getApplicationContext(), cacheManager, executorService, requestProcessorListener, networkStateChecker);
+    }
+
+    /**
+     * Factory method to create an entity responsible to check for network state. The default implementation of this method will return a {@link DefaultNetworkStateChecker}. Override this method if
+     * you want to inject a custom network state for testing or to adapt to connectivity changes on the Android. This method is also useful to create non-network related requests. In that case create
+     * a {@link NetworkStateChecker} that always return true. This feature has been implemented following a request from Pierre Durand.
+     * @return a {@link NetworkStateChecker} that will be used to determine if network state allows requests executions.
      */
     protected NetworkStateChecker getNetworkStateChecker() {
         return new DefaultNetworkStateChecker();
     }
 
     /**
-     * Factory method to create an {@link ExecutorService} that will be used to
-     * execute requests. The default implementation of this method will create a
-     * single threaded or multi-threaded {@link ExecutorService} depending on
-     * the number of threads returned by {@link #getThreadCount()}. If you
-     * override this method in your service, you can supply a custom
-     * {@link ExecutorService}. This feature has been implemented following a
-     * request from Riccardo Ciovati.
+     * Factory method to create an {@link ExecutorService} that will be used to execute requests. The default implementation of this method will create a single threaded or multi-threaded
+     * {@link ExecutorService} depending on the number of threads returned by {@link #getThreadCount()}. If you override this method in your service, you can supply a custom {@link ExecutorService}.
+     * This feature has been implemented following a request from Riccardo Ciovati.
      * @return the {@link ExecutorService} to be used to execute requests .
      */
     protected ExecutorService getExecutorService() {
@@ -141,22 +138,28 @@ public abstract class SpiceService extends Service {
         } else if (threadCount == 1) {
             executorService = Executors.newSingleThreadExecutor();
         } else {
-            executorService = Executors.newFixedThreadPool(threadCount,
-                new ThreadFactory() {
+            executorService = Executors.newFixedThreadPool(threadCount, new ThreadFactory() {
 
-                    @Override
-                    public Thread newThread(final Runnable r) {
-                        return new Thread(r);
-                    }
-                });
+                @Override
+                public Thread newThread(final Runnable r) {
+                    return new Thread(r);
+                }
+            });
         }
         return executorService;
     }
 
-    public static Notification createDefaultNotification() {
-        @SuppressWarnings("deprecation")
-        final Notification note = new Notification(0, null,
-            System.currentTimeMillis());
+    /**
+     * This method can be overrided in order to create a foreground SpiceService. By default, it will create a notification that can't be used to set a spiceService to foreground. It can work on some
+     * versions of Android but it should be overriden for more safety.
+     * @return a notification used to tell user that the SpiceService is still running and processing requests.
+     */
+    public Notification createDefaultNotification() {
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this);
+        builder.setSmallIcon(0);
+        builder.setTicker(null);
+        builder.setWhen(System.currentTimeMillis());
+        final Notification note = builder.getNotification();
         note.flags |= Notification.FLAG_NO_CLEAR;
         return note;
     }
@@ -177,14 +180,12 @@ public abstract class SpiceService extends Service {
         return DEFAULT_THREAD_COUNT;
     }
 
-    public void addRequest(final CachedSpiceRequest<?> request,
-        final Set<RequestListener<?>> listRequestListener) {
+    public void addRequest(final CachedSpiceRequest<?> request, final Set<RequestListener<?>> listRequestListener) {
         currentPendingRequestCount++;
         requestProcessor.addRequest(request, listRequestListener);
     }
 
-    public boolean removeDataFromCache(final Class<?> clazz,
-        final Object cacheKey) {
+    public boolean removeDataFromCache(final Class<?> clazz, final Object cacheKey) {
         return requestProcessor.removeDataFromCache(clazz, cacheKey);
     }
 
@@ -196,15 +197,12 @@ public abstract class SpiceService extends Service {
         return cacheManager.getAllCacheKeys(clazz);
     }
 
-    public <T> List<T> loadAllDataFromCache(final Class<T> clazz)
-        throws CacheLoadingException {
+    public <T> List<T> loadAllDataFromCache(final Class<T> clazz) throws CacheLoadingException {
         return cacheManager.loadAllDataFromCache(clazz);
     }
 
-    public <T> T getDataFromCache(final Class<T> clazz, final String cacheKey)
-        throws CacheLoadingException {
-        return cacheManager.loadDataFromCache(clazz, cacheKey,
-            DurationInMillis.ALWAYS);
+    public <T> T getDataFromCache(final Class<T> clazz, final Object cacheKey) throws CacheLoadingException {
+        return cacheManager.loadDataFromCache(clazz, cacheKey, DurationInMillis.ALWAYS_RETURNED);
     }
 
     public void removeAllDataFromCache() {
@@ -219,11 +217,8 @@ public abstract class SpiceService extends Service {
         requestProcessor.setFailOnCacheError(failOnCacheError);
     }
 
-    public void dontNotifyRequestListenersForRequest(
-        final CachedSpiceRequest<?> request,
-        final Collection<RequestListener<?>> listRequestListener) {
-        requestProcessor.dontNotifyRequestListenersForRequest(request,
-            listRequestListener);
+    public void dontNotifyRequestListenersForRequest(final CachedSpiceRequest<?> request, final Collection<RequestListener<?>> listRequestListener) {
+        requestProcessor.dontNotifyRequestListenersForRequest(request, listRequestListener);
     }
 
     // ============================================================================================
@@ -244,8 +239,7 @@ public abstract class SpiceService extends Service {
         return result;
     }
 
-    private final class SelfStopperRequestProcessorListener implements
-        RequestProcessorListener {
+    private final class SelfStopperRequestProcessorListener implements RequestProcessorListener {
         @Override
         public void allRequestComplete() {
             currentPendingRequestCount = 0;
@@ -269,15 +263,12 @@ public abstract class SpiceService extends Service {
         Ln.v(requestProcessor.toString());
     }
 
-    public void addSpiceServiceListener(
-        final SpiceServiceServiceListener spiceServiceServiceListener) {
+    public void addSpiceServiceListener(final SpiceServiceServiceListener spiceServiceServiceListener) {
         requestProcessor.addSpiceServiceListener(spiceServiceServiceListener);
     }
 
-    public void removeSpiceServiceListener(
-        final SpiceServiceServiceListener spiceServiceServiceListener) {
-        requestProcessor
-            .removeSpiceServiceListener(spiceServiceServiceListener);
+    public void removeSpiceServiceListener(final SpiceServiceServiceListener spiceServiceServiceListener) {
+        requestProcessor.removeSpiceServiceListener(spiceServiceServiceListener);
     }
 
     private void stopIfNotBoundAndHasNoPendingRequests() {
@@ -291,8 +282,7 @@ public abstract class SpiceService extends Service {
     // http://code.google.com/p/android/issues/detail?id=12122
     private void startForeground(final Notification notification) {
         try {
-            final Method setForegroundMethod = Service.class.getMethod(
-                "startForeground", int.class, Notification.class);
+            final Method setForegroundMethod = Service.class.getMethod("startForeground", int.class, Notification.class);
             setForegroundMethod.invoke(this, NOTIFICATION_ID, notification);
         } catch (final SecurityException e) {
             Ln.e(e, "Unable to start a service in foreground");

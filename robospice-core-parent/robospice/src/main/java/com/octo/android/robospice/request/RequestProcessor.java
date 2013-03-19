@@ -14,13 +14,14 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 
 import com.octo.android.robospice.SpiceService;
-import com.octo.android.robospice.SpiceServiceServiceListener;
 import com.octo.android.robospice.exception.NetworkException;
 import com.octo.android.robospice.exception.NoNetworkException;
 import com.octo.android.robospice.exception.RequestCancelledException;
 import com.octo.android.robospice.networkstate.NetworkStateChecker;
+import com.octo.android.robospice.persistence.DurationInMillis;
 import com.octo.android.robospice.persistence.ICacheManager;
 import com.octo.android.robospice.persistence.exception.CacheLoadingException;
 import com.octo.android.robospice.persistence.exception.CacheSavingException;
@@ -30,10 +31,10 @@ import com.octo.android.robospice.request.listener.RequestListener;
 import com.octo.android.robospice.request.listener.RequestProgress;
 import com.octo.android.robospice.request.listener.RequestProgressListener;
 import com.octo.android.robospice.request.listener.RequestStatus;
+import com.octo.android.robospice.request.listener.SpiceServiceServiceListener;
 
 /**
- * Delegate class of the {@link SpiceService}, easier to test than an Android
- * {@link Service}.
+ * Delegate class of the {@link SpiceService}, easier to test than an Android {@link Service}.
  * @author jva
  */
 public class RequestProcessor {
@@ -44,9 +45,7 @@ public class RequestProcessor {
         .synchronizedMap(new LinkedHashMap<CachedSpiceRequest<?>, Set<RequestListener<?>>>());
 
     /**
-     * Thanks Olivier Croiser from Zenika for his excellent <a href=
-     * "http://blog.zenika.com/index.php?post/2012/04/11/Introduction-programmation-concurrente-Java-2sur2. "
-     * >blog article</a>.
+     * Thanks Olivier Croiser from Zenika for his excellent <a href= "http://blog.zenika.com/index.php?post/2012/04/11/Introduction-programmation-concurrente-Java-2sur2. " >blog article</a>.
      */
     private ExecutorService executorService = null;
 
@@ -69,21 +68,15 @@ public class RequestProcessor {
     // ============================================================================================
 
     /**
-     * Build a request processor using a custom. This feature has been
-     * implemented follwing a feature request from Riccardo Ciovati.
+     * Build a request processor using a custom. This feature has been implemented follwing a feature request from Riccardo Ciovati.
      * @param context
-     *            the context on which {@link SpiceRequest} will provide their
-     *            results.
+     *            the context on which {@link SpiceRequest} will provide their results.
      * @param cacheManager
-     *            the {@link CacheManager} that will be used to retrieve
-     *            requests' result and store them.
+     *            the {@link CacheManager} that will be used to retrieve requests' result and store them.
      * @param executorService
-     *            a custom {@link ExecutorService} that will be used to execute
-     *            {@link SpiceRequest}.
+     *            a custom {@link ExecutorService} that will be used to execute {@link SpiceRequest}.
      * @param requestProcessorListener
-     *            a listener of the {@link RequestProcessor}, it will be
-     *            notified when no more requests are left, typically allowing
-     *            the {@link SpiceService} to stop itself.
+     *            a listener of the {@link RequestProcessor}, it will be notified when no more requests are left, typically allowing the {@link SpiceService} to stop itself.
      */
     public RequestProcessor(final Context context, final ICacheManager cacheManager, final ExecutorService executorService,
         final RequestProcessorListener requestProcessorListener, final NetworkStateChecker networkStateChecker) {
@@ -106,10 +99,12 @@ public class RequestProcessor {
         Ln.d("Adding request to queue " + hashCode() + ": " + request + " size is " + mapRequestToRequestListener.size());
 
         if (request.isCancelled()) {
-            for (final CachedSpiceRequest<?> cachedSpiceRequest : mapRequestToRequestListener.keySet()) {
-                if (cachedSpiceRequest.equals(request)) {
-                    cachedSpiceRequest.cancel();
-                    return;
+            synchronized (mapRequestToRequestListener) {
+                for (final CachedSpiceRequest<?> cachedSpiceRequest : mapRequestToRequestListener.keySet()) {
+                    if (cachedSpiceRequest.equals(request)) {
+                        cachedSpiceRequest.cancel();
+                        return;
+                    }
                 }
             }
         }
@@ -188,16 +183,23 @@ public class RequestProcessor {
         };
         request.setRequestProgressListener(requestProgressListener);
 
-        if (request.getRequestCacheKey() != null) {
+        if (request.getRequestCacheKey() != null && request.getCacheDuration() != DurationInMillis.ALWAYS_EXPIRED) {
             // First, search data in cache
             try {
                 Ln.d("Loading request from cache : " + request);
                 request.setStatus(RequestStatus.READING_FROM_CACHE);
                 result = loadDataFromCache(request.getResultType(), request.getRequestCacheKey(), request.getCacheDuration());
+                // if something is found in cache, fire result and finish request
                 if (result != null) {
                     Ln.d("Request loaded from cache : " + request + " result=" + result);
                     notifyListenersOfRequestSuccess(request, result);
                     return;
+                } else if (request.isAcceptingDirtyCache()) {
+                    // as a fallback, some request may accept whatever is in the cache but still want an update from network.
+                    result = loadDataFromCache(request.getResultType(), request.getRequestCacheKey(), DurationInMillis.ALWAYS_RETURNED);
+                    if (result != null) {
+                        notifyListenersOfRequestSuccessButDontCompleteRequest(request, result);
+                    }
                 }
             } catch (final CacheLoadingException e) {
                 Ln.d(e, "Cache file could not be read.");
@@ -210,64 +212,78 @@ public class RequestProcessor {
             }
         }
 
-        if (result == null) {
-            // if result is not in cache, load data from network
-            Ln.d("Cache content not available or expired or disabled");
-            if (!isNetworkAvailable(applicationContext)) {
-                Ln.e("Network is down.");
-                notifyListenersOfRequestFailure(request, new NoNetworkException());
+        // if result is not in cache, load data from network
+        Ln.d("Cache content not available or expired or disabled");
+        if (!isNetworkAvailable(applicationContext)) {
+            Ln.e("Network is down.");
+            notifyListenersOfRequestFailure(request, new NoNetworkException());
+            return;
+        }
+
+        // network is ok, load data from network
+        try {
+            if (request.isCancelled()) {
                 return;
             }
-
-            // network is ok, load data from network
-            try {
-                Ln.d("Calling netwok request.");
-                request.setStatus(RequestStatus.LOADING_FROM_NETWORK);
-                result = request.loadDataFromNetwork();
-                Ln.d("Network request call ended.");
-            } catch (final Exception e) {
+            Ln.d("Calling netwok request.");
+            request.setStatus(RequestStatus.LOADING_FROM_NETWORK);
+            result = request.loadDataFromNetwork();
+            Ln.d("Network request call ended.");
+        } catch (final Exception e) {
+            if (!request.isCancelled()) {
                 Ln.e(e, "An exception occured during request network execution :" + e.getMessage());
                 notifyListenersOfRequestFailure(request, new NetworkException("Exception occured during invocation of web service.", e));
-                return;
-            }
-
-            if (result != null && request.getRequestCacheKey() != null) {
-                // request worked and result is not null, save
-                // it to cache
-                try {
-                    Ln.d("Start caching content...");
-                    request.setStatus(RequestStatus.WRITING_TO_CACHE);
-                    result = saveDataToCacheAndReturnData(result, request.getRequestCacheKey());
-                    notifyListenersOfRequestSuccess(request, result);
-                    return;
-                } catch (final CacheSavingException e) {
-                    Ln.d("An exception occured during service execution :" + e.getMessage(), e);
-                    if (failOnCacheError) {
-                        notifyListenersOfRequestFailure(request, e);
-                        return;
-                    } else {
-                        // result can't be saved to
-                        // cache but we reached that
-                        // point after a success of load
-                        // data from
-                        // network
-                        notifyListenersOfRequestSuccess(request, result);
-                    }
-                    cacheManager.removeDataFromCache(request.getResultType(), request.getRequestCacheKey());
-                    Ln.d(e, "Cache file deleted.");
-                }
             } else {
-                // result can't be saved to cache but we reached
-                // that point after a success of load data from
-                // network
+                Ln.e("An exception occured during request network execution but request was cancelled, so listeners are not called.");
+            }
+            return;
+        }
+
+        if (result != null && request.getRequestCacheKey() != null) {
+            // request worked and result is not null, save
+            // it to cache
+            try {
+                if (request.isCancelled()) {
+                    return;
+                }
+                Ln.d("Start caching content...");
+                request.setStatus(RequestStatus.WRITING_TO_CACHE);
+                result = saveDataToCacheAndReturnData(result, request.getRequestCacheKey());
+                if (request.isCancelled()) {
+                    return;
+                }
                 notifyListenersOfRequestSuccess(request, result);
                 return;
+            } catch (final CacheSavingException e) {
+                Ln.d("An exception occured during service execution :" + e.getMessage(), e);
+                if (failOnCacheError) {
+                    notifyListenersOfRequestFailure(request, e);
+                    return;
+                } else {
+                    if (request.isCancelled()) {
+                        return;
+                    }
+                    // result can't be saved to
+                    // cache but we reached that
+                    // point after a success of load
+                    // data from
+                    // network
+                    notifyListenersOfRequestSuccess(request, result);
+                }
+                cacheManager.removeDataFromCache(request.getResultType(), request.getRequestCacheKey());
+                Ln.d(e, "Cache file deleted.");
             }
+        } else {
+            // result can't be saved to cache but we reached
+            // that point after a success of load data from
+            // network
+            notifyListenersOfRequestSuccess(request, result);
+            return;
         }
     }
 
     private void post(final Runnable r, final Object token) {
-        handlerResponse.postAtTime(r, token, 0);
+        handlerResponse.postAtTime(r, token, SystemClock.uptimeMillis());
     }
 
     private <T> void notifyListenersOfRequestProgress(final CachedSpiceRequest<?> request, final Set<RequestListener<?>> listeners,
@@ -277,6 +293,7 @@ public class RequestProcessor {
 
     private <T> void notifyListenersOfRequestProgress(final CachedSpiceRequest<?> request, final Set<RequestListener<?>> listeners,
         final RequestProgress progress) {
+        Ln.d("Sending progress %s", progress.getStatus());
         post(new ProgressRunnable(listeners, progress), request.getRequestCacheKey());
         checkAllRequestComplete();
     }
@@ -285,6 +302,12 @@ public class RequestProcessor {
         if (mapRequestToRequestListener.isEmpty()) {
             requestProcessorListener.allRequestComplete();
         }
+    }
+
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private <T> void notifyListenersOfRequestSuccessButDontCompleteRequest(final CachedSpiceRequest<T> request, final T result) {
+        final Set<RequestListener<?>> listeners = mapRequestToRequestListener.get(request);
+        post(new ResultRunnable(listeners, result), request.getRequestCacheKey());
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -313,13 +336,11 @@ public class RequestProcessor {
 
     /**
      * Disable request listeners notifications for a specific request.<br/>
-     * All listeners associated to this request won't be called when request
-     * will finish.<br/>
+     * All listeners associated to this request won't be called when request will finish.<br/>
      * @param request
      *            Request on which you want to disable listeners
      * @param listRequestListener
-     *            the collection of listeners associated to request not to be
-     *            notified
+     *            the collection of listeners associated to request not to be notified
      */
     public void dontNotifyRequestListenersForRequest(final CachedSpiceRequest<?> request, final Collection<RequestListener<?>> listRequestListener) {
         handlerResponse.removeCallbacksAndMessages(request.getRequestCacheKey());
@@ -488,5 +509,9 @@ public class RequestProcessor {
                 spiceServiceServiceListener.onRequestProcessed(request);
             }
         }
+    }
+
+    public int getPendingRequestCount() {
+        return mapRequestToRequestListener.keySet().size();
     }
 }

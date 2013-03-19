@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
 	<!-- Sonatype config to publish on Maven Central -->
@@ -97,12 +98,12 @@
 		<android-annotations.version>4.1.1.4</android-annotations.version>
 		<android-support.version>r7</android-support.version>
 		<easymock.version>2.5.2</easymock.version>
-		<mockwebserver.version>20121111</mockwebserver.version>
+		<mockwebserver.version>20130303</mockwebserver.version>
 		<junit.version>4.11</junit.version>
 		<commons-logging.version>1.1.1</commons-logging.version>
 
 		<!-- PLUGINS VERSIONS -->
-		<android-maven-plugin.version>3.4.2-SNAPSHOT</android-maven-plugin.version>
+		<android-maven-plugin.version>3.5.1</android-maven-plugin.version>
 		<site-maven-plugin.version>0.7</site-maven-plugin.version>
 		<maven-project-info-reports-plugin.version>2.6</maven-project-info-reports-plugin.version>
 		<maven-surefire-report-plugin.version>2.6</maven-surefire-report-plugin.version>
@@ -124,20 +125,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<github.global.server>github</github.global.server>
-		<!-- <maven.javadoc.skip>true</maven.javadoc.skip> -->
 	</properties>
-
-	<!-- TODO : remove this when android maven plugin 3.4.2 is out -->
-	<pluginRepositories>
-		<pluginRepository>
-			<id>oss.sonatype.org-jayway-snapshots</id>
-			<name>Jayway OpenSource SNAPSHOTs on Sonatype.org</name>
-			<url>http://oss.sonatype.org/content/repositories/jayway-snapshots/</url>
-			<snapshots>
-				<enabled>true</enabled>
-			</snapshots>
-		</pluginRepository>
-	</pluginRepositories>
 
 	<dependencyManagement>
 		<dependencies>
@@ -532,6 +520,42 @@
 						<artifactId>maven-gpg-plugin</artifactId>
 					</plugin>
 				</plugins>
+			</build>
+		</profile>
+		<profile>
+			<id>fast</id>
+			<properties>
+				<maven.javadoc.skip>true</maven.javadoc.skip>
+			</properties>
+			<build>
+				<pluginManagement>
+					<plugins>
+						<plugin>
+							<groupId>org.codehaus.mojo</groupId>
+							<artifactId>findbugs-maven-plugin</artifactId>
+							<version>${findbugs-maven-plugin.version}</version>
+							<configuration>
+								<skip>true</skip>
+							</configuration>
+						</plugin>
+						<plugin>
+							<groupId>org.apache.maven.plugins</groupId>
+							<artifactId>maven-pmd-plugin</artifactId>
+							<version>${maven-pmd-plugin.version}</version>
+							<configuration>
+								<skip>true</skip>
+							</configuration>
+						</plugin>
+						<plugin>
+							<groupId>org.apache.maven.plugins</groupId>
+							<artifactId>maven-checkstyle-plugin</artifactId>
+							<version>${maven-checkstyle-plugin.version}</version>
+							<configuration>
+								<skip>true</skip>
+							</configuration>
+						</plugin>
+					</plugins>
+				</pluginManagement>
 			</build>
 		</profile>
 	</profiles>

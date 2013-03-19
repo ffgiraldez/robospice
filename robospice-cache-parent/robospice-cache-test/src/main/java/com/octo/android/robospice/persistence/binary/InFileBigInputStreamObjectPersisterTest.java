@@ -47,7 +47,7 @@ public class InFileBigInputStreamObjectPersisterTest extends InstrumentationTest
         File cachedFile = inputStreamCacheManager.getCacheFile(TEST_CACHE_KEY);
         IOUtils.write("coucou", new FileOutputStream(cachedFile));
 
-        InputStream inputStream = inputStreamCacheManager.loadDataFromCache(TEST_CACHE_KEY, DurationInMillis.ALWAYS);
+        InputStream inputStream = inputStreamCacheManager.loadDataFromCache(TEST_CACHE_KEY, DurationInMillis.ALWAYS_RETURNED);
         byte[] actual = IOUtils.toByteArray(inputStream);
         assertTrue(Arrays.equals("coucou".getBytes(), actual));
     }
@@ -56,7 +56,7 @@ public class InFileBigInputStreamObjectPersisterTest extends InstrumentationTest
         File cachedFile = inputStreamCacheManager.getCacheFile(TEST_CACHE_KEY);
         IOUtils.write("coucou", new FileOutputStream(cachedFile));
 
-        InputStream inputStream = inputStreamCacheManager.loadDataFromCache(TEST_CACHE_KEY, DurationInMillis.ONE_SECOND);
+        InputStream inputStream = inputStreamCacheManager.loadDataFromCache(TEST_CACHE_KEY, FIVE_SECONDS);
         byte[] actual = IOUtils.toByteArray(inputStream);
         assertTrue(Arrays.equals("coucou".getBytes(), actual));
     }

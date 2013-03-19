@@ -33,8 +33,8 @@ public class RequestProcessorTest extends InstrumentationTestCase {
     private static final String TEST_CACHE_KEY2 = "12345_2";
     private static final long TEST_DURATION = DurationInMillis.ONE_SECOND;
     private static final String TEST_RETURNED_DATA = "coucou";
-    private static final long REQUEST_COMPLETION_TIME_OUT = 4000;
-    private static final long WAIT_BEFORE_REQUEST_EXECUTION = 1000;
+    private static final long REQUEST_COMPLETION_TIME_OUT = 2000;
+    private static final long WAIT_BEFORE_REQUEST_EXECUTION = 200;
 
     private ICacheManager mockCacheManager;
     private RequestProcessor requestProcessorUnderTest;
@@ -193,7 +193,8 @@ public class RequestProcessorTest extends InstrumentationTestCase {
     public void testAddRequest_when_request_is_cancelled_and_new_one_relaunched_with_same_key() throws CacheLoadingException, CacheSavingException,
         InterruptedException {
         // given
-        CachedSpiceRequestStub<String> stubRequest = createSuccessfulRequest(TEST_CLASS, TEST_CACHE_KEY, TEST_DURATION, TEST_RETURNED_DATA);
+        CachedSpiceRequestStub<String> stubRequest = createSuccessfulRequest(TEST_CLASS, TEST_CACHE_KEY, TEST_DURATION, TEST_RETURNED_DATA,
+            WAIT_BEFORE_REQUEST_EXECUTION);
 
         RequestListenerWithProgressStub<String> mockRequestListener = new RequestListenerWithProgressStub<String>();
         Set<RequestListener<?>> requestListenerSet = new HashSet<RequestListener<?>>();
@@ -211,21 +212,26 @@ public class RequestProcessorTest extends InstrumentationTestCase {
         requestProcessorUnderTest.addRequest(stubRequest, requestListenerSet);
         stubRequest.cancel();
         mockRequestListener.await(REQUEST_COMPLETION_TIME_OUT);
+        mockRequestListener.awaitComplete(REQUEST_COMPLETION_TIME_OUT);
+
         stubRequest = createSuccessfulRequest(TEST_CLASS, TEST_CACHE_KEY, TEST_DURATION, TEST_RETURNED_DATA);
         mockRequestListener = new RequestListenerWithProgressStub<String>();
-        requestListenerSet.clear();
+        requestListenerSet = new HashSet<RequestListener<?>>();
         requestListenerSet.add(mockRequestListener);
 
         requestProcessorUnderTest.addRequest(stubRequest, requestListenerSet);
 
         mockRequestListener.await(REQUEST_COMPLETION_TIME_OUT);
+        mockRequestListener.awaitComplete(REQUEST_COMPLETION_TIME_OUT);
 
         // then
         // EasyMock.verify( mockCacheManager );
+        assertFalse(stubRequest.isCancelled());
         assertTrue(stubRequest.isLoadDataFromNetworkCalled());
         assertTrue(mockRequestListener.isExecutedInUIThread());
-        assertTrue(mockRequestListener.isSuccessful());
         assertTrue(mockRequestListener.isComplete());
+        System.out.println(mockRequestListener.getReceivedException());
+        assertTrue(mockRequestListener.isSuccessful());
     }
 
     public void testAddRequest_with_null_listener() throws CacheLoadingException, CacheSavingException, InterruptedException {
@@ -532,18 +538,18 @@ public class RequestProcessorTest extends InstrumentationTestCase {
     // PRIVATE METHODS
     // ============================================================================================
 
-    private <T> CachedSpiceRequestStub<T> createSuccessfulRequest(Class<T> clazz, String cacheKey, long maxTimeInCache, T returnedData) {
+    private <T> CachedSpiceRequestStub<T> createSuccessfulRequest(Class<T> clazz, Object cacheKey, long maxTimeInCache, T returnedData) {
         SpiceRequestStub<T> stubContentRequest = new SpiceRequestSucceedingStub<T>(clazz, returnedData);
         return new CachedSpiceRequestStub<T>(stubContentRequest, cacheKey, maxTimeInCache);
     }
 
-    private <T> CachedSpiceRequestStub<T> createSuccessfulRequest(Class<T> clazz, String cacheKey, long maxTimeInCache, T returnedData,
+    private <T> CachedSpiceRequestStub<T> createSuccessfulRequest(Class<T> clazz, Object cacheKey, long maxTimeInCache, T returnedData,
         long waitBeforeExecution) {
         SpiceRequestStub<T> stubContentRequest = new SpiceRequestSucceedingStub<T>(clazz, returnedData, waitBeforeExecution);
         return new CachedSpiceRequestStub<T>(stubContentRequest, cacheKey, maxTimeInCache);
     }
 
-    private <T> CachedSpiceRequestStub<T> createFailedRequest(Class<T> clazz, String cacheKey, long maxTimeInCache) {
+    private <T> CachedSpiceRequestStub<T> createFailedRequest(Class<T> clazz, Object cacheKey, long maxTimeInCache) {
         SpiceRequestStub<T> stubContentRequest = new SpiceRequestFailingStub<T>(clazz);
         return new CachedSpiceRequestStub<T>(stubContentRequest, cacheKey, maxTimeInCache);
     }

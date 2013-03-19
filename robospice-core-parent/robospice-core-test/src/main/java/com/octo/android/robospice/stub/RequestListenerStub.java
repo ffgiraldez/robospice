@@ -44,8 +44,7 @@ public class RequestListenerStub<T> implements RequestListener<T> {
     }
 
     protected void checkIsExectuedInUIThread() {
-        if (Looper.myLooper() != null
-            && Looper.myLooper() == Looper.getMainLooper()) {
+        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
             isExecutedInUIThread = true;
         }
     }
@@ -65,9 +64,16 @@ public class RequestListenerStub<T> implements RequestListener<T> {
     public void await(long millisecond) throws InterruptedException {
         lock.lock();
         try {
+            if (isSuccessful != null) {
+                return;
+            }
             requestFinishedCondition.await(millisecond, TimeUnit.MILLISECONDS);
         } finally {
             lock.unlock();
         }
+    }
+
+    public void resetSuccess() {
+        this.isSuccessful = null;
     }
 }
